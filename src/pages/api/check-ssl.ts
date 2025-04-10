@@ -3,6 +3,7 @@ import { checkSSL } from '../../utils/sslChecker';
 import { checkWhois } from '../../utils/whoisChecker';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { SSLInfo } from '../../types/domain';
 
 // İstek kilitlerini tutmak için Map
 const lockMap = new Map<string, boolean>();
@@ -32,20 +33,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log(`Fetching fresh SSL info for ${domain}...`);
 
-    // First get SSL info
-    const sslInfo = await checkSSL(domain);
-    console.log('SSL Check Details:', {
-      domain,
-      validFrom: sslInfo.validFrom,
-      validTo: sslInfo.validTo,
-      now: new Date().toISOString(),
-      daysRemaining: sslInfo.daysRemaining
-    });
-
     // Get existing domain info
     const existingDomain = await prisma.monitoredDomain.findUnique({
       where: { domain }
     });
+
+    // Type assertion for sslInfo
+    const existingSslInfo = existingDomain?.sslInfo as SSLInfo | undefined;
 
     const lastChecked = existingDomain?.updatedAt;
     const cooldownPeriod = 5 * 60 * 1000; // 5 dakika
@@ -53,24 +47,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     // Ön bellek kontrolü
     if (!forceCheck && 
-        existingDomain?.sslInfo && 
+        existingSslInfo && 
         lastChecked && 
         (now.getTime() - lastChecked.getTime()) < cooldownPeriod) {
       console.log(`Using cached SSL info for ${domain} (last checked: ${lastChecked})`);
-      return res.status(200).json(existingDomain.sslInfo);
+      return res.status(200).json(existingSslInfo);
     }
 
-    // Try to get WHOIS info, but keep old info if it fails
-    const whoisInfo = await checkWhois(domain).catch(err => ({
-      domainExpiryDate: existingDomain?.sslInfo?.domainExpiryDate,
-      registrar: existingDomain?.sslInfo?.registrar
+    // Get fresh SSL info
+    const sslInfo = await checkSSL(domain);
+
+    // Try to get WHOIS info with proper types
+    const whoisInfo = await checkWhois(domain).catch(() => ({
+      domainExpiryDate: existingSslInfo?.domainExpiryDate,
+      registrar: existingSslInfo?.registrar
     }));
 
-    // Combine the information
+    // Combine with proper typing
     const sslInfoJson: Prisma.JsonObject = {
       ...sslInfo,
-      domainExpiryDate: whoisInfo.domainExpiryDate || existingDomain?.sslInfo?.domainExpiryDate,
-      registrar: whoisInfo.registrar || existingDomain?.sslInfo?.registrar,
+      domainExpiryDate: whoisInfo.domainExpiryDate || existingSslInfo?.domainExpiryDate,
+      registrar: whoisInfo.registrar || existingSslInfo?.registrar,
       lastChecked: new Date().toISOString()
     };
 
