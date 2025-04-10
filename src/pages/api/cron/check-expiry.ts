@@ -130,10 +130,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       emailsSentTo: settings?.recipients?.length || 0
     });
   } catch (error) {
-    console.error('❌ Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('❌ Error:', errorMessage);
+    
     return res.status(500).json({ 
       error: 'Error checking expiry dates',
-      details: error?.message 
+      details: errorMessage
     });
   }
 }
