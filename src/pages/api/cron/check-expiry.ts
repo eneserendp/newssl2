@@ -83,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           {
             sslInfo: {
               path: ['domainExpiryDate'],
-              not: null
+              gt: '' // 'not: null' yerine 'gt: ""' kullan
             }
           }
         ]
