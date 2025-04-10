@@ -1,0 +1,25 @@
+FROM alpine:3.18
+
+# Install required packages
+RUN apk add --no-cache \
+    curl \
+    bash \
+    tzdata
+
+# Set timezone
+ENV TZ=Europe/Istanbul
+
+# Create app directory and logs directory
+WORKDIR /app
+RUN mkdir -p /app/logs
+
+# Copy cron script
+COPY src/scripts/check-ssl-cron.sh /app/
+RUN chmod +x /app/check-ssl-cron.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD pgrep -f "check-ssl-cron.sh" || exit 1
+
+# Start cron script
+CMD ["/app/check-ssl-cron.sh"]

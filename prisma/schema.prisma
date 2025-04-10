@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Timezone ayarı için PostgreSQL'de çalıştırılacak komut:
+// ALTER DATABASE ssl_checker_db SET timezone TO 'Europe/Istanbul';
+
+model MonitoredDomain {
+  id        Int      @id @default(autoincrement())
+  domain    String   @unique
+  sslInfo   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Settings {
+  id                    Int      @id @default(1)
+  cronTime             String   @default("09:00")
+  recipients           String[] @default([])
+  sslWarningThreshold  Int      @default(20)    // SSL sertifikası için uyarı süresi
+  domainWarningThreshold Int    @default(30)    // Domain süresi için uyarı süresi
+}
+
