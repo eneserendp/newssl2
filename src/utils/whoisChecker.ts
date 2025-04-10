@@ -1,30 +1,54 @@
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
+
 export interface WhoisInfo {
-  domainExpiryDate: string;
-  registrar?: string;
+  domainExpiryDate: string | null;
+  registrar?: string | null;
 }
 
-export const checkWhois = async (domain: string): Promise<WhoisInfo> => {
-  const apiKey = 'at_JLgYZoinG09Dy3UxKh4NuVb0f5ktS';
-  const url = `https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=${apiKey}&domainName=${domain}&outputFormat=JSON`;
-
+export async function checkWhois(domain: string): Promise<WhoisInfo> {
   try {
-    const response = await fetch(url);
-    const data = await response.json();
+    // Try whois command first
+    const { stdout } = await execPromise(`whois ${domain}`);
+    
+    // Parse expiry date and registrar from whois output
+    const expiryMatch = stdout.match(/Expir[y|ation] Date:\s*(.+)/i);
+    const registrarMatch = stdout.match(/Registrar:\s*(.+)/i);
 
-    if (!response.ok) {
-      throw new Error('WHOIS lookup failed');
+    const domainExpiryDate = expiryMatch?.[1]?.trim();
+    const registrar = registrarMatch?.[1]?.trim();
+
+    // If we can't find the date, return null values
+    if (!domainExpiryDate) {
+      console.log(`No expiry date found for ${domain} in WHOIS data`);
+      return {
+        domainExpiryDate: null,
+        registrar: registrar || null
+      };
     }
 
-    const expiryDate = data.WhoisRecord?.registryData?.expiresDate || 
-                      data.WhoisRecord?.expiresDate;
-    const registrar = data.WhoisRecord?.registrar?.name;
+    // Try to parse the date
+    const parsedDate = new Date(domainExpiryDate);
+    if (isNaN(parsedDate.getTime())) {
+      console.log(`Invalid date format for ${domain}: ${domainExpiryDate}`);
+      return {
+        domainExpiryDate: null,
+        registrar: registrar || null
+      };
+    }
 
     return {
-      domainExpiryDate: expiryDate || 'Unknown',
-      registrar: registrar || 'Unknown'
+      domainExpiryDate: parsedDate.toISOString(),
+      registrar: registrar || null
     };
+
   } catch (error) {
-    console.error('WHOIS lookup error:', error);
-    throw error;
+    console.log(`WHOIS lookup failed for ${domain}, using fallback values`);
+    return {
+      domainExpiryDate: null,
+      registrar: null
+    };
   }
-};
+}

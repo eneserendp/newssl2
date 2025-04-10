@@ -30,6 +30,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Domain için kilidi aktifleştir
     lockMap.set(domain, true);
 
+    console.log(`Fetching fresh SSL info for ${domain}...`);
+
+    // First get SSL info
+    const sslInfo = await checkSSL(domain);
+    console.log('SSL Check Details:', {
+      domain,
+      validFrom: sslInfo.validFrom,
+      validTo: sslInfo.validTo,
+      now: new Date().toISOString(),
+      daysRemaining: sslInfo.daysRemaining
+    });
+
+    // Get existing domain info
     const existingDomain = await prisma.monitoredDomain.findUnique({
       where: { domain }
     });
@@ -47,47 +60,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json(existingDomain.sslInfo);
     }
 
-    // Yeni SSL ve WHOIS kontrolü
-    console.log(`Fetching fresh SSL and WHOIS info for ${domain}...`);
-    const [sslInfo, whoisInfo] = await Promise.all([
-      checkSSL(domain),
-      checkWhois(domain)
-    ]);
+    // Try to get WHOIS info, but keep old info if it fails
+    const whoisInfo = await checkWhois(domain).catch(err => ({
+      domainExpiryDate: existingDomain?.sslInfo?.domainExpiryDate,
+      registrar: existingDomain?.sslInfo?.registrar
+    }));
 
-    // SSL verilerini ve whois bilgilerini birleştir
+    // Combine the information
     const sslInfoJson: Prisma.JsonObject = {
-      valid: sslInfo.valid,
-      validFrom: sslInfo.validFrom,
-      validTo: sslInfo.validTo,
-      daysRemaining: sslInfo.daysRemaining,
-      issuer: sslInfo.issuer,
-      lastChecked: now.toISOString(),
-      domainExpiryDate: whoisInfo.domainExpiryDate,
-      registrar: whoisInfo.registrar
+      ...sslInfo,
+      domainExpiryDate: whoisInfo.domainExpiryDate || existingDomain?.sslInfo?.domainExpiryDate,
+      registrar: whoisInfo.registrar || existingDomain?.sslInfo?.registrar,
+      lastChecked: new Date().toISOString()
     };
 
-    // SSL ve WHOIS verilerini logla
-    console.log('SSL Check Details:', {
-      domain,
-      validFrom: sslInfo.validFrom,
-      validTo: sslInfo.validTo,
-      now: new Date().toISOString(),
-      daysRemaining: sslInfo.daysRemaining,
-      domainExpiryDate: whoisInfo.domainExpiryDate,
-      registrar: whoisInfo.registrar
-    });
-
-    // SSL verilerini doğrula
-    if (!sslInfo || typeof sslInfo.daysRemaining !== 'number') {
-      throw new Error('Invalid SSL info received');
-    }
-
-    // Veritabanını güncelle
+    // Update database
     const updatedDomain = await prisma.monitoredDomain.upsert({
       where: { domain },
       update: { 
         sslInfo: sslInfoJson,
-        updatedAt: now
+        updatedAt: new Date()
       },
       create: {
         domain,

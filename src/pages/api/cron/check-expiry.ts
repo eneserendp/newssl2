@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '../../../lib/prisma';
 import { sendExpiryNotification } from '../../../utils/emailService';
 import { checkSSL } from '../../../utils/sslChecker';
+import { checkWhois } from '../../../utils/whoisChecker';
 import { Prisma } from '@prisma/client';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -10,41 +11,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sslWarningThreshold = settings?.sslWarningThreshold || 20;
     const domainWarningThreshold = settings?.domainWarningThreshold || 30;
     
-    // Saat kontrolünü debug edelim
+    // Saat kontrolü
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
     const scheduledTime = settings?.cronTime || '09:00';
 
-    console.log({
-      systemTime: now.toString(),
+    console.log('Time Check:', {
       currentTime,
       scheduledTime,
-      timezone: process.env.TZ,
+      timezone: process.env.TZ
     });
 
-    // Sadece saat eşleştiğinde veya hata durumunda log bas
     if (scheduledTime === currentTime) {
-      console.log(`🕒 Scheduled time reached: ${scheduledTime}`);
-      console.log('🔄 Starting daily SSL updates...');
-      
-      // Her domain için SSL bilgilerini güncelle
+      console.log('🔄 Starting daily updates...');
       const allDomains = await prisma.monitoredDomain.findMany();
-      console.log(`Found ${allDomains.length} domains to update`);
       
       for (const domain of allDomains) {
         try {
-          console.log(`Updating SSL info for ${domain.domain}...`);
-          const oldDaysRemaining = (domain.sslInfo as any).daysRemaining;
+          console.log(`Checking ${domain.domain}...`);
+          const oldSslInfo = domain.sslInfo as any;
           
-          const updatedSslInfo = await checkSSL(domain.domain);
+          // SSL ve WHOIS kontrollerini paralel yap
+          const [sslInfo, whoisInfo] = await Promise.all([
+            checkSSL(domain.domain),
+            checkWhois(domain.domain).catch(err => ({
+              domainExpiryDate: oldSslInfo?.domainExpiryDate,
+              registrar: oldSslInfo?.registrar
+            }))
+          ]);
           
-          // SSLInfo'yu Prisma JsonValue formatına çevir
+          // Bilgileri birleştir
           const sslInfoJson: Prisma.JsonObject = {
-            valid: updatedSslInfo.valid,
-            validFrom: updatedSslInfo.validFrom,
-            validTo: updatedSslInfo.validTo,
-            daysRemaining: updatedSslInfo.daysRemaining,
-            issuer: updatedSslInfo.issuer
+            ...sslInfo,
+            domainExpiryDate: whoisInfo.domainExpiryDate || oldSslInfo?.domainExpiryDate,
+            registrar: whoisInfo.registrar || oldSslInfo?.registrar,
+            lastChecked: new Date().toISOString()
           };
 
           await prisma.monitoredDomain.update({
@@ -55,23 +56,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           });
           
-          console.log(`✅ ${domain.domain}: ${oldDaysRemaining} days -> ${updatedSslInfo.daysRemaining} days`);
+          console.log(`✅ Updated ${domain.domain}:`, {
+            ssl: `${oldSslInfo?.daysRemaining} -> ${sslInfo.daysRemaining} days`,
+            domainExpiry: whoisInfo.domainExpiryDate || oldSslInfo?.domainExpiryDate,
+            registrar: whoisInfo.registrar || oldSslInfo?.registrar
+          });
         } catch (error) {
           console.error(`❌ Failed to update ${domain.domain}:`, error);
         }
       }
-      
-      console.log('🏁 Daily SSL updates completed');
+
+      console.log('🏁 Daily updates completed');
     }
 
     if (scheduledTime !== currentTime) {
       return res.status(200).json({ status: 'waiting' });
     }
 
+    // Domain süresi kontrolünü düzelt
     const expiringDomains = await prisma.monitoredDomain.findMany({
       where: {
         OR: [
-          // SSL expiry check
           {
             sslInfo: {
               path: ['daysRemaining'],
@@ -79,11 +84,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               gt: 0
             }
           },
-          // Domain expiry check
           {
             sslInfo: {
               path: ['domainExpiryDate'],
-              gt: '' // 'not: null' yerine 'gt: ""' kullan
+              gt: ''
             }
           }
         ]
@@ -125,8 +129,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       domainsChecked: domainsToNotify.length,
       emailsSentTo: settings?.recipients?.length || 0
     });
-  } catch (error: any) { // Error tipini belirttik
-    console.error('❌ Error:', error?.message || 'Unknown error');
+  } catch (error) {
+    console.error('❌ Error:', error);
     return res.status(500).json({ 
       error: 'Error checking expiry dates',
       details: error?.message 

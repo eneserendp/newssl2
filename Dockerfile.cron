@@ -1,25 +1,26 @@
-FROM alpine:3.18
+# Node sürümünü değiştir
+FROM node:18-alpine
 
-# Install required packages
-RUN apk add --no-cache \
-    curl \
-    bash \
-    tzdata
+# Timezone ve diğer paketleri yükle
+RUN apk add --no-cache tzdata curl bash
 
-# Set timezone
+# Timezone'u Türkiye olarak ayarla
 ENV TZ=Europe/Istanbul
 
-# Create app directory and logs directory
 WORKDIR /app
-RUN mkdir -p /app/logs
 
-# Copy cron script
-COPY src/scripts/check-ssl-cron.sh /app/
-RUN chmod +x /app/check-ssl-cron.sh
+# Temel dosyaları kopyala
+COPY package*.json ./
+COPY prisma ./prisma/
+COPY src ./src/
+COPY check-ssl-cron.sh .
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD pgrep -f "check-ssl-cron.sh" || exit 1
+# Dependencies yükle ve Prisma client oluştur
+RUN npm install
+RUN npx prisma generate
 
-# Start cron script
-CMD ["/app/check-ssl-cron.sh"]
+# Script'i çalıştırılabilir yap
+RUN chmod +x check-ssl-cron.sh
+
+# Cron script'i başlat
+CMD ["/bin/bash", "./check-ssl-cron.sh"]
